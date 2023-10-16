@@ -7,6 +7,7 @@
 */
 
 import SwiftUI
+import RegexBuilder
 
 public final class EmojiParser {
     public static let shared = EmojiParser()
@@ -18,7 +19,12 @@ public final class EmojiParser {
     }
 
     private init() {
-        let groups = loadEmojiGroup()
+        guard let path = Bundle.module.path(forResource: "14.0-emoji-test", ofType: "txt"),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let text = String(data: data, encoding: .utf8) else {
+            fatalError("Could not get data from 14.0-emoji-test.txt")
+        }
+        let groups = Self.loadEmojiGroup(from: text)
         groups.forEach { group in
             guard let category = EmojiCategory(groupName: group.name) else {
                 return
@@ -31,13 +37,53 @@ public final class EmojiParser {
             }
         }
     }
-
-    private func loadEmojiGroup() -> [EmojiGroup] {
-        guard let path = Bundle.module.path(forResource: "14.0-emoji-test", ofType: "txt"),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let text = String(data: data, encoding: .utf8) else {
-            fatalError("Could not get data from 14.0-emoji-test.txt")
+    
+    static func newLoadEmojiGroup(from text: String) -> [EmojiGroup] {
+        var groups = [EmojiGroup]()
+        var subgroups = [EmojiSubGroup]()
+        var emojis = [Emoji]()
+        
+        let groupRegex = Regex {
+            "# group:"
+            OneOrMore(.whitespace)
+            Capture { OneOrMore(.anyNonNewline) }
         }
+        let subgroupRegex = Regex {
+            "# subgroup:"
+            OneOrMore(.whitespace)
+            Capture { OneOrMore(.anyNonNewline) }
+        }
+        let emojiRegex = Regex.emojiLine
+        
+        text.enumerateLines { line, stop in
+            if let match = line.wholeMatch(of: groupRegex) {
+                subgroups = []
+                groups.append(EmojiGroup(name: String(match.output.1), subgroups: []))
+                return
+            }
+            
+            if let match = line.wholeMatch(of: subgroupRegex) {
+                emojis = []
+                subgroups.append(EmojiSubGroup(name: String(match.output.1), emojis: []))
+                groups[groups.count - 1].subgroups = subgroups
+                return
+            }
+            
+            if let match = line.wholeMatch(of: emojiRegex) {
+                let id = String(match.output.3)
+                if match.output.4?.contains("skin tone") == true {
+                    return
+                }
+                emojis.append(Emoji(id: id, character: String(match.output.2)))
+                subgroups[subgroups.count - 1].emojis = emojis
+                groups[groups.count - 1].subgroups = subgroups
+                return
+            }
+        }
+        return groups
+    }
+
+    static func loadEmojiGroup(from text: String) -> [EmojiGroup] {
         var groups = [EmojiGroup]()
         var subgroups = [EmojiSubGroup]()
         var emojis = [Emoji]()
@@ -84,5 +130,80 @@ public final class EmojiParser {
             fatalError("Could not get random emoji")
         }
         return emoji
+    }
+}
+
+extension Regex where Self.RegexOutput == Substring {
+    static var codePoints: Regex {
+        Regex {
+            OneOrMore(.anyNonNewline)
+        }
+    }
+    
+    static var validEmojiStatus: Regex {
+        Regex {
+            ChoiceOf {
+                "component"
+                "fully-qualified"
+            }
+        }
+    }
+    
+    /// 👋🏼 E1.0 waving hand: medium-light skin
+    static var emojiName: Regex {
+        Regex {
+            Capture { // emoji
+                One(.any)
+            }
+            ZeroOrMore(.whitespace)
+            emojiNameVersion
+            ZeroOrMore(.whitespace)
+            Capture {
+                OneOrMore(.reluctant) {
+                    .anyNonNewline
+                }
+                Optionally {
+                    emojiNameNote
+                }
+            }
+        }
+    }
+    
+    static var emojiNameVersion: Regex {
+        Regex {
+            OneOrMore {
+                CharacterClass(
+                    .anyOf("E."),
+                    ("0"..."9")
+                )
+            }
+        }
+    }
+    
+    static func emojiNameNote(as reference: Reference<Substring>) -> Regex {
+        Regex {
+            ": "
+            Capture(as: reference) {
+                OneOrMore {
+                    .anyNonNewline
+                }
+            }
+        }
+    }
+    
+    /// code points; status # emoji name
+    static var emojiLine: Regex {
+        Regex {
+            codePoints
+            OneOrMore(.whitespace)
+            ";"
+            OneOrMore(.whitespace)
+            validEmojiStatus
+            OneOrMore(.whitespace)
+            "#"
+            ZeroOrMore(.whitespace)
+            emojiName
+        }
+        .matchingSemantics(.unicodeScalar)
     }
 }

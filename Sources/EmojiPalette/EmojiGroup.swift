@@ -6,7 +6,7 @@
  
 */
 
-struct EmojiGroup {
+struct EmojiGroup: Equatable {
     var name: String
     var subgroups: [EmojiSubGroup]
 }
